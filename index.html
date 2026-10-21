@@ -634,6 +634,7 @@
     const roomPan = document.querySelector('.room-pan');
     const motionButton = document.querySelector('.motion-enable');
     let pan = .5, tilt = 0, baseline = null, roomDragging = null, roomFrame = null;
+    let roomTargetPan = .5, lastRoomAlpha = null, roomSensorSeen = false;
     async function finishSlinky() {
       if (slinkyFinished) return;
       slinkyFinished = true;
@@ -655,7 +656,10 @@
       function render(now) {
         const dt = Math.min((now - last) / 1000, .05);
         last = now;
-        if (!roomDragging && !diaryOpen) pan = Math.max(0, Math.min(1, pan + tilt * dt * .28));
+        if (!roomDragging && !diaryOpen) {
+          if (lastRoomAlpha === null) roomTargetPan = Math.max(0, Math.min(1, roomTargetPan + tilt * dt * .36));
+          pan += (roomTargetPan - pan) * (1 - Math.exp(-dt * 14));
+        }
         roomPan.style.backgroundPosition = `${pan * 100}% center`;
         positionDiary();
         roomFrame = requestAnimationFrame(render);
@@ -664,15 +668,32 @@
     }
     function readTilt(event) {
       detectPhysicalTurn(event);
-      if (event.gamma === null || event.beta === null) return;
-      const angle = screen.orientation?.angle ?? window.orientation ?? 0;
-      const side = Math.abs(angle) === 90 ? event.beta * (angle === 90 ? 1 : -1) : event.gamma;
-      if (baseline === null) baseline = side;
-      const delta = side - baseline;
-      tilt = Math.abs(delta) < 4 ? 0 : Math.max(-1, Math.min(1, delta / 25));
+      if (!diaryScene.classList.contains('active') || diaryOpen || roomDragging) {
+        lastRoomAlpha = null;
+        return;
+      }
+      roomSensorSeen = true;
+      motionButton.hidden = true;
+      // Alpha follows looking left/right, rather than just tilting the screen.
+      if (Number.isFinite(event.alpha)) {
+        if (lastRoomAlpha !== null) {
+          let delta = event.alpha - lastRoomAlpha;
+          if (delta > 180) delta -= 360;
+          if (delta < -180) delta += 360;
+          if (Math.abs(delta) < 35) roomTargetPan = Math.max(0, Math.min(1, roomTargetPan - delta / 95));
+        }
+        lastRoomAlpha = event.alpha;
+      }
+      if (Number.isFinite(event.gamma) && Number.isFinite(event.beta)) {
+        const angle = screen.orientation?.angle ?? window.orientation ?? 0;
+        const side = Math.abs(angle) === 90 ? event.beta * (angle === 90 ? 1 : -1) : event.gamma;
+        if (baseline === null) baseline = side;
+        const delta = side - baseline;
+        tilt = Math.abs(delta) < 3 ? 0 : Math.max(-1, Math.min(1, delta / 22));
+      }
     }
     motionButton.addEventListener('click', enableRoomMotion);
-    window.addEventListener('orientationchange', () => { baseline = null; tilt = 0; });
+    window.addEventListener('orientationchange', () => { baseline = null; tilt = 0; lastRoomAlpha = null; roomTargetPan = pan; });
     roomPan.addEventListener('pointerdown', event => {
       if (!event.isPrimary) return;
       roomDragging = { id: event.pointerId, x: event.clientX, pan };
@@ -683,7 +704,7 @@
       const overflow = Math.max(1, diaryScene.clientHeight * (1916 / 821) - diaryScene.clientWidth);
       pan = Math.max(0, Math.min(1, roomDragging.pan - (event.clientX - roomDragging.x) / overflow));
     });
-    function releaseRoom() { roomDragging = null; }
+    function releaseRoom() { roomDragging = null; roomTargetPan = pan; lastRoomAlpha = null; baseline = null; }
     roomPan.addEventListener('pointerup', releaseRoom);
     roomPan.addEventListener('pointercancel', releaseRoom);
     roomPan.addEventListener('lostpointercapture', releaseRoom);
@@ -1213,7 +1234,7 @@
     const startButton = experienceStart.querySelector('button');
     startButton.addEventListener('click', async () => {
       if (experienceStart.dataset.microphone === 'unavailable') { beginPhoneScene(); return; }
-      requestExperienceFullscreen();
+      // Request motion first: fullscreen can consume the initial permission gesture.
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass && !initialAudioContext) initialAudioContext = new AudioContextClass();
       initialAudioContext?.resume().catch(() => {});
@@ -1344,9 +1365,17 @@
     window.visualViewport?.addEventListener('resize', syncMobileViewport);
     window.addEventListener('pageshow', syncMobileViewport);
     syncMobileViewport();
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && motionGranted) {
+        lastRoomAlpha = null; baseline = null; roomTargetPan = pan;
+        window.removeEventListener('deviceorientation', readTilt);
+        window.addEventListener('deviceorientation', readTilt);
+      }
+    });
   </script>
 </body>
 </html>
+
 
 
 
