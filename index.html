@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#e79cbb">
+  <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="theme-color" content="#e79cbb">
   <title>niñas 2000</title>
   <style>
     * { box-sizing: border-box; }
@@ -268,6 +268,15 @@
       mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 941 1672'%3E%3Cdefs%3E%3Cmask id='cut'%3E%3Crect width='941' height='1672' fill='white'/%3E%3Crect x='332' y='260' width='282' height='407' rx='24' fill='black'/%3E%3C/mask%3E%3C/defs%3E%3Crect width='941' height='1672' fill='white' mask='url(%23cut)'/%3E%3C/svg%3E");
       -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
     }
+    :root { --experience-height: 100dvh; }
+    html, body { width: 100%; height: 100%; min-height: 100%; overscroll-behavior: none; }
+    .scene, .magazine-scene, .orientation-scene, .diary-scene, .diary-closeup, .experience-start { width: 100%; height: var(--experience-height); min-height: 0; }
+    .orientation-scene { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+    .orientation-scene:not(.slinky-started) .horizontal-stage { display: none; }
+    .orientation-scene:not(.slinky-started) .rotate-prompt { display: block; }
+    .orientation-scene.slinky-started .rotate-prompt { display: none !important; }
+    .orientation-scene.slinky-started .horizontal-stage { display: block !important; }
+    .ipod-full > img { max-height: calc(var(--experience-height) - 32px); }
   </style>
 </head>
 <body>
@@ -555,15 +564,39 @@
       orientationScene.classList.add('active'); updateOrientation();
       orientationScene.setAttribute('aria-hidden', 'false');
     }
+    let physicalOrientation = null, pendingPhysical = null, physicalSince = 0;
+    function effectiveOrientation() {
+      if (physicalOrientation) return physicalOrientation;
+      const type = screen.orientation?.type;
+      if (type?.startsWith('landscape')) return 'landscape';
+      const angle = screen.orientation?.angle ?? window.orientation;
+      if (typeof angle === 'number' && Math.abs(angle) % 180 === 90) return 'landscape';
+      return landscapeQuery.matches ? 'landscape' : 'portrait';
+    }
+    function detectPhysicalTurn(event) {
+      if (event.gamma == null || event.beta == null) return;
+      const gamma = Math.abs(event.gamma), beta = Math.abs(event.beta);
+      const candidate = gamma > 55 ? 'landscape' : gamma < 30 && beta > 35 ? 'portrait' : null;
+      if (!candidate) return;
+      if (candidate !== pendingPhysical) { pendingPhysical = candidate; physicalSince = performance.now(); return; }
+      if (performance.now() - physicalSince > 350 && candidate !== physicalOrientation) {
+        physicalOrientation = candidate;
+        updateOrientation();
+      }
+    }
     const landscapeQuery = matchMedia('(orientation: landscape)');
     function updateOrientation() {
       const panel = document.querySelector('.orientation-scene');
-      panel.dataset.orientation = landscapeQuery.matches ? 'landscape' : 'portrait';
+      panel.dataset.orientation = effectiveOrientation();
       panel.setAttribute('aria-label', landscapeQuery.matches ? 'Vista horizontal' : 'Gira el teléfono para continuar en horizontal');
-      panel.querySelector('.horizontal-stage').setAttribute('aria-hidden', String(!landscapeQuery.matches));
+      panel.querySelector('.horizontal-stage').setAttribute('aria-hidden', String(!slinkyStarted));
       syncSlinky();
     }
-    landscapeQuery.addEventListener('change', updateOrientation);
+    if (landscapeQuery.addEventListener) landscapeQuery.addEventListener('change', updateOrientation);
+    else landscapeQuery.addListener(updateOrientation);
+    screen.orientation?.addEventListener?.('change', updateOrientation);
+    window.addEventListener('orientationchange', () => setTimeout(updateOrientation, 250));
+    window.addEventListener('resize', () => { updateOrientation(); syncMobileViewport(); });
     const slinkyContainer = document.querySelector('.slinky-frames');
     const slinkyFrames = Array.from({ length: 14 }, (_, index) => {
       const img = new Image();
@@ -581,7 +614,7 @@
     function syncSlinky() {
       const panel = document.querySelector('.orientation-scene');
       if (!panel.classList.contains('active') || slinkyFinished) return;
-      const orientation = landscapeQuery.matches ? 'landscape' : 'portrait';
+      const orientation = effectiveOrientation();
       if (!slinkyStarted) {
         if (orientation !== 'landscape') return;
         slinkyStarted = true;
@@ -630,6 +663,7 @@
       roomFrame = requestAnimationFrame(render);
     }
     function readTilt(event) {
+      detectPhysicalTurn(event);
       if (event.gamma === null || event.beta === null) return;
       const angle = screen.orientation?.angle ?? window.orientation ?? 0;
       const side = Math.abs(angle) === 90 ? event.beta * (angle === 90 ? 1 : -1) : event.gamma;
@@ -660,7 +694,7 @@
       if (!slinkyStarted) {
         slinkyStarted = true;
         panel.classList.add('slinky-started');
-        lastSlinkyOrientation = landscapeQuery.matches ? 'landscape' : 'portrait';
+        lastSlinkyOrientation = effectiveOrientation();
       } else {
         slinkyFrames[slinkyVisible].classList.remove('current');
         slinkyVisible = Math.min(slinkyVisible + 1, slinkyFrames.length - 1);
@@ -1179,6 +1213,7 @@
     const startButton = experienceStart.querySelector('button');
     startButton.addEventListener('click', async () => {
       if (experienceStart.dataset.microphone === 'unavailable') { beginPhoneScene(); return; }
+      requestExperienceFullscreen();
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass && !initialAudioContext) initialAudioContext = new AudioContextClass();
       initialAudioContext?.resume().catch(() => {});
@@ -1220,21 +1255,40 @@
     backgroundMusic.preload = 'auto';
     backgroundMusic.loop = true;
     backgroundMusic.volume = .22;
-    let backgroundVolumeFrame = null;
+    let backgroundGain = null, backgroundSource = null, desiredBackgroundVolume = .22;
+    function configureBackgroundGain() {
+      if (!backgroundGain && initialAudioContext) {
+        try {
+          backgroundSource = initialAudioContext.createMediaElementSource(backgroundMusic);
+          backgroundGain = initialAudioContext.createGain();
+          backgroundGain.gain.value = desiredBackgroundVolume;
+          backgroundSource.connect(backgroundGain);
+          backgroundGain.connect(initialAudioContext.destination);
+          backgroundMusic.volume = 1;
+        } catch (_) { }
+      }
+    }
     function startBackgroundMusic() {
+      configureBackgroundGain();
+      initialAudioContext?.resume().catch(() => {});
       backgroundMusic.play().catch(() => {
         document.addEventListener('pointerdown', () => backgroundMusic.play().catch(() => {}), { once: true });
       });
     }
     function fadeBackgroundVolume(target) {
-      cancelAnimationFrame(backgroundVolumeFrame);
-      const initial = backgroundMusic.volume, started = performance.now();
-      function step(now) {
-        const t = Math.min(1, (now - started) / 850);
-        backgroundMusic.volume = initial + (target - initial) * t;
-        if (t < 1) backgroundVolumeFrame = requestAnimationFrame(step);
+      const inPlayer = magazine.classList.contains('ipod-open') && !ipodTaken;
+      desiredBackgroundVolume = inPlayer ? .008 : target;
+      configureBackgroundGain();
+      if (backgroundGain) {
+        backgroundMusic.muted = false;
+        const now = initialAudioContext.currentTime;
+        backgroundGain.gain.cancelScheduledValues(now);
+        backgroundGain.gain.setTargetAtTime(desiredBackgroundVolume, now, .18);
+      } else {
+        // Some mobile browsers ignore media.volume; mute prevents overlap there.
+        backgroundMusic.muted = inPlayer || target === 0;
+        backgroundMusic.volume = desiredBackgroundVolume;
       }
-      backgroundVolumeFrame = requestAnimationFrame(step);
     }
     let voicePrepared = false;
     async function prepareVoiceAtStart() {
@@ -1279,9 +1333,21 @@
       status.textContent = '';
       startVoice();
     }
+    function syncMobileViewport() {
+      const height = window.visualViewport?.height || innerHeight;
+      document.documentElement.style.setProperty('--experience-height', `${Math.round(height)}px`);
+    }
+    function requestExperienceFullscreen() {
+      if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+      document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+    }
+    window.visualViewport?.addEventListener('resize', syncMobileViewport);
+    window.addEventListener('pageshow', syncMobileViewport);
+    syncMobileViewport();
   </script>
 </body>
 </html>
+
 
 
 
